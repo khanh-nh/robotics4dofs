@@ -8,6 +8,10 @@ void printHelp();
 bool parseFourValues(String command, int startIndex, float values[4]);
 bool parseThreeValues(String command, int startIndex, float values[3]);
 
+// Stepper Motor Pins
+const int stepPin = 14;
+const int dirPin = 12;
+
 // =====================================================
 // Parse helpers
 // =====================================================
@@ -135,6 +139,10 @@ void setup() {
 
   setupServos();
 
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+  pinMode(relayPin, OUTPUT);
+
   printHelp();
 
   Serial.println("Robot arm ready.");
@@ -182,6 +190,18 @@ void loop() {
       return;
     }
 
+    if (command == "relay on") {
+      digitalWrite(relayPin, HIGH);
+      Serial.println("Relay is ON");
+      return;
+    }
+
+    if (command == "relay off") {
+      digitalWrite(relayPin, LOW);
+      Serial.println("Relay is OFF");
+      return;
+    }
+
     if (command.startsWith("speed ")) {
       int newSpeed = command.substring(6).toInt();
       stepDelayMs = constrain(newSpeed, 5, 60);
@@ -193,7 +213,23 @@ void loop() {
 
     if (command.startsWith("stepper ")) {
       float degrees = command.substring(8).toFloat();
-      moveStepper(degrees);
+      
+      // 3200 steps for 1 full revolution (1/16 microstepping)
+      int steps = abs(degrees) * (3200.0 / 360.0) ;
+      
+      if (degrees >= 0) {
+        digitalWrite(dirPin, HIGH); // Set direction forward
+      } else {
+        digitalWrite(dirPin, LOW);  // Set direction backward
+      }
+      
+      // Create pulses for steps
+      for (int x = 0; x < steps; x++) {
+        digitalWrite(stepPin, HIGH);
+        delayMicroseconds(1000);
+        digitalWrite(stepPin, LOW);
+        delayMicroseconds(1000);
+      }
       return;
     }
 
