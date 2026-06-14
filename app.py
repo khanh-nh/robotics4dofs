@@ -83,6 +83,16 @@ with st.sidebar:
     if st.button("Update Speed"):
         send_command(f"speed {speed}")
 
+    st.divider()
+    st.header("Relay Control")
+    col_relay1, col_relay2 = st.columns(2)
+    with col_relay1:
+        if st.button("Relay ON", use_container_width=True):
+            send_command("relay on")
+    with col_relay2:
+        if st.button("Relay OFF", use_container_width=True):
+            send_command("relay off")
+
 # Main content tabs
 tab1, tab2, tab3, tab4 = st.tabs(["Preset Motions", "Cartesian Control (IK)", "Joint Control (FK)", "Stepper Motor"])
 
@@ -135,11 +145,11 @@ with tab2:
         send_command(f"go {x_val} {y_val} {z_val}")
 
 with tab3:
-    st.header("Joint Angle Control (FK)")
-    st.write("Directly control the angles of each joint.")
+    st.header("Raw Servo Control")
+    st.write("Directly control the raw angles of each servo.")
     
-    # Initialize session state for joints
-    joint_defaults = {'pitch': 0.0, 'roll': 0.0, 'yaw': 0.0, 'elbow': 0.0}
+    # Initialize session state for raw servo angles
+    joint_defaults = {'s0': 130.0, 's1': 17.0, 's2': 150.0, 's3': 127.0}
     for j, default in joint_defaults.items():
         if f'{j}_val' not in st.session_state:
             st.session_state[f'{j}_val'] = default
@@ -149,36 +159,43 @@ with tab3:
     
     colp, colr, colw, cole = st.columns(4)
     with colp:
-        st.number_input("Pitch (S0)", min_value=-50.0, max_value=130.0, value=st.session_state.pitch_val, step=1.0, key="pitch_num", on_change=update_joint, args=("pitch", "num"))
-        st.slider("Pitch Slider", min_value=-50.0, max_value=130.0, value=st.session_state.pitch_val, step=1.0, key="pitch_slider", label_visibility="collapsed", on_change=update_joint, args=("pitch", "slider"))
-        pitch = st.session_state.pitch_val
+        st.number_input("Shoulder Pitch (S0)", min_value=0.0, max_value=180.0, value=st.session_state.s0_val, step=1.0, key="s0_num", on_change=update_joint, args=("s0", "num"))
+        st.slider("S0 Slider", min_value=0.0, max_value=180.0, value=st.session_state.s0_val, step=1.0, key="s0_slider", label_visibility="collapsed", on_change=update_joint, args=("s0", "slider"))
+        s0 = st.session_state.s0_val
     with colr:
-        st.number_input("Roll (S1)", min_value=0.0, max_value=160.0, value=st.session_state.roll_val, step=1.0, key="roll_num", on_change=update_joint, args=("roll", "num"))
-        st.slider("Roll Slider", min_value=0.0, max_value=160.0, value=st.session_state.roll_val, step=1.0, key="roll_slider", label_visibility="collapsed", on_change=update_joint, args=("roll", "slider"))
-        roll = st.session_state.roll_val
+        st.number_input("Shoulder Roll (S1)", min_value=0.0, max_value=180.0, value=st.session_state.s1_val, step=1.0, key="s1_num", on_change=update_joint, args=("s1", "num"))
+        st.slider("S1 Slider", min_value=0.0, max_value=180.0, value=st.session_state.s1_val, step=1.0, key="s1_slider", label_visibility="collapsed", on_change=update_joint, args=("s1", "slider"))
+        s1 = st.session_state.s1_val
     with colw:
-        st.number_input("Yaw (S2)", min_value=-30.0, max_value=150.0, value=st.session_state.yaw_val, step=1.0, key="yaw_num", on_change=update_joint, args=("yaw", "num"))
-        st.slider("Yaw Slider", min_value=-30.0, max_value=150.0, value=st.session_state.yaw_val, step=1.0, key="yaw_slider", label_visibility="collapsed", on_change=update_joint, args=("yaw", "slider"))
-        yaw = st.session_state.yaw_val
+        st.number_input("Shoulder Yaw (S2)", min_value=0.0, max_value=180.0, value=st.session_state.s2_val, step=1.0, key="s2_num", on_change=update_joint, args=("s2", "num"))
+        st.slider("S2 Slider", min_value=0.0, max_value=180.0, value=st.session_state.s2_val, step=1.0, key="s2_slider", label_visibility="collapsed", on_change=update_joint, args=("s2", "slider"))
+        s2 = st.session_state.s2_val
     with cole:
-        st.number_input("Elbow (S3)", min_value=-55.0, max_value=125.0, value=st.session_state.elbow_val, step=1.0, key="elbow_num", on_change=update_joint, args=("elbow", "num"))
-        st.slider("Elbow Slider", min_value=-55.0, max_value=125.0, value=st.session_state.elbow_val, step=1.0, key="elbow_slider", label_visibility="collapsed", on_change=update_joint, args=("elbow", "slider"))
-        elbow = st.session_state.elbow_val
+        st.number_input("Elbow Pitch (S3)", min_value=0.0, max_value=180.0, value=st.session_state.s3_val, step=1.0, key="s3_num", on_change=update_joint, args=("s3", "num"))
+        st.slider("S3 Slider", min_value=0.0, max_value=180.0, value=st.session_state.s3_val, step=1.0, key="s3_slider", label_visibility="collapsed", on_change=update_joint, args=("s3", "slider"))
+        s3 = st.session_state.s3_val
         
-    if st.button("Set Joint Angles", type="primary"):
-        send_command(f"q {pitch} {roll} {yaw} {elbow}")
+    if st.button("Set Servo Angles", type="primary"):
+        send_command(f"all {s0} {s1} {s2} {s3}")
 
 with tab4:
     st.header("Stepper Motor Control")
     st.write("Control the separated stepper motor (A4988 driver).")
     
+    stepper_deg = st.number_input("Degrees to move", min_value=-3600.0, max_value=3600.0, value=360.0, step=10.0, help="Positive for forward, negative for backward")
+    
+    if st.button("Move Stepper", type="primary", use_container_width=True):
+        send_command(f"stepper {stepper_deg}")
+        
+    st.divider()
+
     col_step1, col_step2 = st.columns(2)
     with col_step1:
-        if st.button("Move 120 deg", use_container_width=True):
+        if st.button("Move +120 deg (Forward)", use_container_width=True):
             send_command("stepper 120")
     with col_step2:
-        if st.button("Move 240 deg", use_container_width=True):
-            send_command("stepper 240")
+        if st.button("Move -120 deg (Backward)", use_container_width=True):
+            send_command("stepper -120")
 
 st.divider()
 if st.button("Request Arm Status"):
