@@ -15,7 +15,14 @@ const int toolServoPin = 27; // tool / gripper / EE servo
 // =====================================================
 const int stepperStepPin = 14;
 const int stepperDirPin  = 12;
-const int stepperStepsPerRev = 200; // 1.8 degree step
+const int stepperStepsPerRev = 3200; // 1.8 degree step with 1/16 microstepping (200 * 16)
+
+
+// Relay Settings
+// =====================================================
+const int relayPin = 21;
+
+// =====================================================
 
 // =====================================================
 // Servo PWM settings
@@ -35,8 +42,8 @@ const int toolRunTimeMs      = 700;
 // =====================================================
 // Rest pose raw servo angles
 // =====================================================
-const int servo0Rest = 130; // shoulder pitch
-const int servo1Rest = 17;  // shoulder roll
+const int servo0Rest = 130; // shoulder pitch 126
+const int servo1Rest = 17;  // shoulder roll 15
 const int servo2Rest = 150; // shoulder yaw
 const int servo3Rest = 127; // elbow pitch
 
@@ -55,7 +62,7 @@ const int servo3Dir = -1; // elbow pitch
 const int servo0Min = 0;
 const int servo0Max = 180;
 
-const int servo1Min = 20;  // shoulder roll limit
+const int servo1Min = 0;  // shoulder roll limit
 const int servo1Max = 180;
 
 const int servo2Min = 0;
