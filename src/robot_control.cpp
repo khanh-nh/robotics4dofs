@@ -20,6 +20,10 @@ float currentElbow = 0;
 int stepDelayMs = 15;
 ToolType activeTool = TOOL_NONE;
 int currentToolStationSlot = toolSlotGripper;
+float currentToolChangePitch = toolChangePitch;
+float currentToolChangeRoll = toolChangeRoll;
+float currentToolChangeYaw = toolChangeYaw;
+float currentToolChangeElbow = toolChangeElbow;
 
 static long smoothStepPermille(int step, int totalSteps) {
   long t = ((long)step * 1000L) / totalSteps;
@@ -167,8 +171,115 @@ bool setActiveTool(ToolType tool) {
 
 void moveToToolChangePose() {
   Serial.println("Moving to tool exchange pose...");
-  moveJointAngles(toolChangePitch, toolChangeRoll, toolChangeYaw, toolChangeElbow);
+  moveJointAngles(currentToolChangePitch, currentToolChangeRoll, currentToolChangeYaw, currentToolChangeElbow);
   delay(toolStationSettleMs);
+}
+
+static void moveJointAnglesWithDelay(float pitch, float roll, float yaw, float elbow, int temporaryDelayMs) {
+  int previousDelayMs = stepDelayMs;
+  stepDelayMs = max(stepDelayMs, temporaryDelayMs);
+  moveJointAngles(pitch, roll, yaw, elbow);
+  stepDelayMs = previousDelayMs;
+}
+
+void moveToToolPrechangePose() {
+  Serial.println("Moving to tool prechange pose...");
+  moveJointAngles(
+    currentToolChangePitch,
+    currentToolChangeRoll,
+    currentToolChangeYaw,
+    clampJoint(3, currentToolChangeElbow + toolPrechangeElbowOffset)
+  );
+  delay(toolStationSettleMs);
+}
+
+void moveIntoToolDockSlow() {
+  Serial.println("Docking slowly from prechange to tool exchange pose...");
+  moveJointAnglesWithDelay(
+    currentToolChangePitch,
+    currentToolChangeRoll,
+    currentToolChangeYaw,
+    currentToolChangeElbow,
+    toolDockSlowDelayMs
+  );
+  delay(toolStationSettleMs);
+}
+
+void shakeToolDockPose() {
+  Serial.println("Searching magnet pose with slow sequential shake...");
+
+  float basePitch = currentToolChangePitch;
+  float baseRoll = currentToolChangeRoll;
+  float baseYaw = currentToolChangeYaw;
+  float baseElbow = currentToolChangeElbow;
+  float shake = toolDockShakeDeg;
+
+  moveJointAnglesWithDelay(clampJoint(0, basePitch + shake), baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(clampJoint(0, basePitch - shake), baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+
+  moveJointAnglesWithDelay(basePitch, clampJoint(1, baseRoll + shake), baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, clampJoint(1, baseRoll - shake), baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+
+  moveJointAnglesWithDelay(basePitch, baseRoll, clampJoint(2, baseYaw + shake), baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, clampJoint(2, baseYaw - shake), baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, clampJoint(3, baseElbow + shake), toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, clampJoint(3, baseElbow - shake), toolDockSlowDelayMs);
+  moveJointAnglesWithDelay(basePitch, baseRoll, baseYaw, baseElbow, toolDockSlowDelayMs);
+}
+
+void moveOutFromDockWithTool() {
+  Serial.println("Moving out from dock with tool...");
+  moveJointAnglesWithDelay(
+    clampJoint(0, currentToolChangePitch + toolMoveOutPitchOffset),
+    currentToolChangeRoll,
+    currentToolChangeYaw,
+    clampJoint(3, currentToolChangeElbow + toolMoveOutElbowWithToolOffset),
+    toolDockSlowDelayMs
+  );
+  delay(toolStationSettleMs);
+}
+
+void moveOutFromDockNoTool() {
+  Serial.println("Moving out from dock with no tool...");
+  moveJointAnglesWithDelay(
+    clampJoint(0, currentToolChangePitch + toolMoveOutPitchOffset),
+    currentToolChangeRoll,
+    currentToolChangeYaw,
+    clampJoint(3, currentToolChangeElbow + toolMoveOutElbowNoToolOffset),
+    toolDockSlowDelayMs
+  );
+  delay(toolStationSettleMs);
+  moveToToolPrechangePose();
+}
+
+void setToolChangePose(float pitch, float roll, float yaw, float elbow) {
+  currentToolChangePitch = clampJoint(0, pitch);
+  currentToolChangeRoll = clampJoint(1, roll);
+  currentToolChangeYaw = clampJoint(2, yaw);
+  currentToolChangeElbow = clampJoint(3, elbow);
+
+  Serial.println("Updated tool exchange pose.");
+  printToolChangePose();
+}
+
+void printToolChangePose() {
+  Serial.print("Tool exchange pose q = [");
+  Serial.print(currentToolChangePitch, 1);
+  Serial.print(", ");
+  Serial.print(currentToolChangeRoll, 1);
+  Serial.print(", ");
+  Serial.print(currentToolChangeYaw, 1);
+  Serial.print(", ");
+  Serial.print(currentToolChangeElbow, 1);
+  Serial.println("] deg");
 }
 
 bool pickupTool(ToolType newTool) {
@@ -190,12 +301,15 @@ bool pickupTool(ToolType newTool) {
   Serial.print("Initial pickup: none -> ");
   Serial.println(toolName(newTool));
 
-  moveToToolChangePose();
   rotateToolStationToSlot(newSlot);
+  moveToToolPrechangePose();
+  moveIntoToolDockSlow();
+  shakeToolDockPose();
   delay(toolStationSettleMs);
   setMagnet(true);
   delay(toolMagnetSettleMs);
   setActiveTool(newTool);
+  moveOutFromDockWithTool();
   printToolStatus();
   return true;
 }
@@ -212,13 +326,15 @@ bool removeHeldTool() {
   Serial.print("Removing held tool: ");
   Serial.println(toolName(oldTool));
 
-  moveToToolChangePose();
-  setToolPower(false);
+  moveToToolPrechangePose();
   rotateToolStationToSlot(oldSlot);
+  moveIntoToolDockSlow();
+  setToolPower(false);
   delay(toolStationSettleMs);
   setMagnet(false);
   delay(toolMagnetSettleMs);
   setActiveTool(TOOL_NONE);
+  moveOutFromDockNoTool();
   printToolStatus();
   return true;
 }
@@ -249,20 +365,25 @@ bool changeHeldTool(ToolType newTool) {
   Serial.print(" -> ");
   Serial.println(toolName(newTool));
 
-  moveToToolChangePose();
-
-  setToolPower(false);
+  moveToToolPrechangePose();
   rotateToolStationToSlot(oldSlot);
+  moveIntoToolDockSlow();
+  setToolPower(false);
   delay(toolStationSettleMs);
   setMagnet(false);
   delay(toolMagnetSettleMs);
   activeTool = TOOL_NONE;
+  moveOutFromDockNoTool();
 
   rotateToolStationToSlot(newSlot);
+  moveToToolPrechangePose();
+  moveIntoToolDockSlow();
+  shakeToolDockPose();
   delay(toolStationSettleMs);
   setMagnet(true);
   delay(toolMagnetSettleMs);
   setActiveTool(newTool);
+  moveOutFromDockWithTool();
   printToolStatus();
   return true;
 }

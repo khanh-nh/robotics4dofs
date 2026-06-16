@@ -16,13 +16,52 @@ if 'magnet_on' not in st.session_state:
     st.session_state.magnet_on = False
 if 'tool_power_on' not in st.session_state:
     st.session_state.tool_power_on = False
+if 'last_serial_response' not in st.session_state:
+    st.session_state.last_serial_response = ""
+if 'last_serial_command' not in st.session_state:
+    st.session_state.last_serial_command = ""
+if 'last_live_command' not in st.session_state:
+    st.session_state.last_live_command = ""
 for joint_name in ["pitch", "roll", "yaw", "elbow"]:
     if f"{joint_name}_val" not in st.session_state:
         st.session_state[f"{joint_name}_val"] = 0.0
+    if f"live_{joint_name}_val" not in st.session_state:
+        st.session_state[f"live_{joint_name}_val"] = 0.0
 
 # --- Helper functions ---
 TOOL_SLOTS = {"gripper": 0, "vacuum": 1, "pump": 1, "drill": 2}
 SLOT_TOOLS = {0: "Gripper", 1: "Vacuum", 2: "Drill"}
+JOINT_LIMITS = {
+    "pitch": ("Shoulder Pitch (S0)", -50.0, 130.0),
+    "roll": ("Shoulder Roll (S1)", -20.0, 160.0),
+    "yaw": ("Shoulder Yaw (S2)", -30.0, 150.0),
+    "elbow": ("Elbow Pitch (S3)", -55.0, 125.0),
+}
+GEOMETRY_DEFAULTS = {
+    "base": (0.0, 70.0, 515.0),
+    "p01": (0.0, 36.0, -14.0),
+    "p12": (0.0, 0.0, -85.0),
+    "p23": (0.0, 29.0, -205.0),
+    "p34": (0.0, 25.0, -140.0),
+}
+
+for point_name, coords in GEOMETRY_DEFAULTS.items():
+    for axis, default_value in zip(["x", "y", "z"], coords):
+        key = f"geom_{point_name}_{axis}"
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+TOOL_CHANGE_POSE_DEFAULTS = {
+    "pitch": 0.0,
+    "roll": 0.0,
+    "yaw": 0.0,
+    "elbow": 0.0,
+}
+
+for joint_name, default_value in TOOL_CHANGE_POSE_DEFAULTS.items():
+    key = f"change_pose_{joint_name}"
+    if key not in st.session_state:
+        st.session_state[key] = default_value
 
 def get_available_ports():
     ports = serial.tools.list_ports.comports()
@@ -39,6 +78,53 @@ def normalize_tool_name(tool):
     if tool in ["0", "none"]:
         return "none"
     return None
+
+def geometry_command(point_name):
+    x = st.session_state[f"geom_{point_name}_x"]
+    y = st.session_state[f"geom_{point_name}_y"]
+    z = st.session_state[f"geom_{point_name}_z"]
+    return f"geom {point_name} {x} {y} {z}"
+
+def tool_change_pose_command():
+    pitch = st.session_state.change_pose_pitch
+    roll = st.session_state.change_pose_roll
+    yaw = st.session_state.change_pose_yaw
+    elbow = st.session_state.change_pose_elbow
+    return f"changepose {pitch} {roll} {yaw} {elbow}"
+
+def joint_offset_command(values):
+    return f"q {values['pitch']} {values['roll']} {values['yaw']} {values['elbow']}"
+
+def current_joint_values(prefix=""):
+    return {
+        "pitch": st.session_state[f"{prefix}pitch_val"],
+        "roll": st.session_state[f"{prefix}roll_val"],
+        "yaw": st.session_state[f"{prefix}yaw_val"],
+        "elbow": st.session_state[f"{prefix}elbow_val"],
+    }
+
+def copy_current_joints_to_change_pose():
+    st.session_state.change_pose_pitch = st.session_state.pitch_val
+    st.session_state.change_pose_roll = st.session_state.roll_val
+    st.session_state.change_pose_yaw = st.session_state.yaw_val
+    st.session_state.change_pose_elbow = st.session_state.elbow_val
+
+def reset_change_pose_defaults():
+    for joint_name, default_value in TOOL_CHANGE_POSE_DEFAULTS.items():
+        st.session_state[f"change_pose_{joint_name}"] = default_value
+
+def read_serial_response(wait_time=0.35):
+    conn = st.session_state.serial_conn
+    if not conn or not conn.is_open:
+        return ""
+
+    time.sleep(wait_time)
+    chunks = []
+    while conn.in_waiting:
+        chunks.append(conn.read(conn.in_waiting).decode("utf-8", errors="replace"))
+        time.sleep(0.05)
+
+    return "".join(chunks).strip()
 
 def remember_command_state(cmd):
     parts = cmd.strip().lower().split()
@@ -145,35 +231,202 @@ def disconnect_serial():
     st.session_state.connected_port = None
     st.success("Disconnected")
 
-def send_command(cmd):
+def send_command(cmd, expect_response=False):
     if st.session_state.serial_conn and st.session_state.serial_conn.is_open:
         try:
+            st.session_state.serial_conn.reset_input_buffer()
             full_cmd = f"{cmd}\n"
             st.session_state.serial_conn.write(full_cmd.encode('utf-8'))
             remember_command_state(cmd)
-            st.toast(f"Sent: {cmd}")
+            st.session_state.last_serial_command = cmd
+
+            if expect_response:
+                response = read_serial_response()
+                st.session_state.last_serial_response = response or "(No response received yet.)"
+                st.toast(st.session_state.last_serial_response[:220])
+            else:
+                st.toast(f"Sent: {cmd}")
         except Exception as e:
             st.error(f"Error sending command: {e}")
             disconnect_serial()
     else:
         st.warning("Not connected to serial port. Please connect first.")
 
+def status_card(label, value, state="neutral"):
+    st.markdown(
+        f"""
+        <div class="status-card status-{state}">
+          <div class="status-label">{label}</div>
+          <div class="status-value">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # --- UI Layout ---
 st.set_page_config(page_title="Humanoid Arm Control", layout="wide")
-st.title("🦾 4-DOF Humanoid Arm Controller")
+st.markdown(
+    """
+    <style>
+      .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+        max-width: 1380px;
+      }
+      h1, h2, h3 {
+        letter-spacing: 0;
+      }
+      h1 {
+        display: none;
+      }
+      h2 {
+        font-size: 1.25rem;
+      }
+      h3 {
+        font-size: 1rem;
+      }
+      .status-card {
+        border: 1px solid #d8dee8;
+        border-left-width: 5px;
+        border-radius: 8px;
+        padding: 0.78rem 0.9rem;
+        background: #ffffff;
+        min-height: 82px;
+      }
+      .status-label {
+        color: #5f6b7a;
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+      .status-value {
+        color: #172033;
+        font-size: 1.45rem;
+        font-weight: 700;
+        line-height: 1.2;
+        margin-top: 0.35rem;
+        word-break: break-word;
+      }
+      .status-ok {
+        border-left-color: #1f9d66;
+      }
+      .status-warn {
+        border-left-color: #d98c00;
+      }
+      .status-off {
+        border-left-color: #8a94a6;
+      }
+      .status-neutral {
+        border-left-color: #3772ff;
+      }
+      .section-note {
+        color: #5f6b7a;
+        margin-top: -0.4rem;
+        margin-bottom: 0.8rem;
+      }
+      .app-title {
+        color: #172033;
+        font-size: 2rem;
+        font-weight: 750;
+        line-height: 1.2;
+        margin-bottom: 0.35rem;
+      }
+      div.stButton > button {
+        border-radius: 8px;
+        min-height: 2.55rem;
+        font-weight: 600;
+      }
+      div[data-testid="stExpander"] {
+        border: 1px solid #d8dee8;
+        border-radius: 8px;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.title("4-DOF Humanoid Arm Controller")
 
-st.subheader("Current Tool Status")
+st.markdown('<div class="app-title">4-DOF Humanoid Arm Controller</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-note">Operator panel for arm motion, tool power, and rotary tool exchange.</div>', unsafe_allow_html=True)
+
+st.subheader("System Status")
 status_col1, status_col2, status_col3, status_col4 = st.columns(4)
 with status_col1:
-    st.metric("Held Tool", st.session_state.held_tool.title())
+    tool_state = "off" if st.session_state.held_tool == "none" else "ok"
+    status_card("Held Tool", st.session_state.held_tool.title(), tool_state)
 with status_col2:
     slot_tool = SLOT_TOOLS.get(st.session_state.station_slot, "Unknown")
-    st.metric("Station Slot", f"{st.session_state.station_slot} - {slot_tool}")
+    status_card("Station Slot", f"{st.session_state.station_slot} - {slot_tool}")
 with status_col3:
-    st.metric("Magnet Relay 1", "ON" if st.session_state.magnet_on else "OFF")
+    status_card("Magnet Relay 1", "ON" if st.session_state.magnet_on else "OFF", "ok" if st.session_state.magnet_on else "off")
 with status_col4:
-    st.metric("Tool Power Relay 2", "ON" if st.session_state.tool_power_on else "OFF")
-st.caption("Status is tracked by this app after commands it sends. Use the firmware status command for serial monitor confirmation.")
+    status_card("Tool Power Relay 2", "ON" if st.session_state.tool_power_on else "OFF", "warn" if st.session_state.tool_power_on else "off")
+st.caption("Status is tracked by this app after commands it sends. Use Status for firmware confirmation.")
+
+if st.session_state.last_serial_response:
+    with st.expander("Firmware Output", expanded=True):
+        st.caption(f"Last command: {st.session_state.last_serial_command}")
+        st.code(st.session_state.last_serial_response)
+
+with st.expander("Robot Geometry Config"):
+    st.caption("Runtime FK/IK geometry in millimeters. Changes are sent to the ESP32 and remain active until reset or reboot.")
+
+    for point_name in ["base", "p01", "p12", "p23", "p34"]:
+        cols = st.columns([1.1, 1, 1, 1, 1])
+        with cols[0]:
+            st.write(point_name)
+        with cols[1]:
+            st.number_input("X", key=f"geom_{point_name}_x", step=1.0, label_visibility="collapsed")
+        with cols[2]:
+            st.number_input("Y", key=f"geom_{point_name}_y", step=1.0, label_visibility="collapsed")
+        with cols[3]:
+            st.number_input("Z", key=f"geom_{point_name}_z", step=1.0, label_visibility="collapsed")
+        with cols[4]:
+            if st.button("Send", key=f"send_geom_{point_name}", use_container_width=True):
+                send_command(geometry_command(point_name), expect_response=True)
+
+    cfg_col1, cfg_col2 = st.columns(2)
+    with cfg_col1:
+        if st.button("Send All Geometry", use_container_width=True):
+            for name in ["base", "p01", "p12", "p23", "p34"]:
+                send_command(geometry_command(name), expect_response=True)
+    with cfg_col2:
+        if st.button("Print Geometry", use_container_width=True):
+            send_command("geom", expect_response=True)
+
+with st.expander("Tool Exchange Position"):
+    st.caption("Joint-offset pose in degrees used before pickup, remove, and tool-to-tool changes.")
+
+    pose_cols = st.columns(4)
+    with pose_cols[0]:
+        st.number_input("Pitch", min_value=-50.0, max_value=130.0, step=1.0, key="change_pose_pitch")
+    with pose_cols[1]:
+        st.number_input("Roll", min_value=-20.0, max_value=160.0, step=1.0, key="change_pose_roll")
+    with pose_cols[2]:
+        st.number_input("Yaw", min_value=-30.0, max_value=150.0, step=1.0, key="change_pose_yaw")
+    with pose_cols[3]:
+        st.number_input("Elbow", min_value=-55.0, max_value=125.0, step=1.0, key="change_pose_elbow")
+
+    pose_btn1, pose_btn2, pose_btn3 = st.columns(3)
+    with pose_btn1:
+        if st.button("Save Exchange Pose", use_container_width=True):
+            send_command(tool_change_pose_command(), expect_response=True)
+    with pose_btn2:
+        if st.button("Move To Exchange Pose", use_container_width=True):
+            send_command("goto changepose")
+    with pose_btn3:
+        if st.button("Print Exchange Pose", use_container_width=True):
+            send_command("changepose", expect_response=True)
+
+    pose_btn4, pose_btn5 = st.columns(2)
+    with pose_btn4:
+        if st.button("Use Current Joint Pose", use_container_width=True):
+            copy_current_joints_to_change_pose()
+            send_command(tool_change_pose_command(), expect_response=True)
+    with pose_btn5:
+        if st.button("Reset Exchange Pose", use_container_width=True):
+            reset_change_pose_defaults()
+            send_command(tool_change_pose_command(), expect_response=True)
 
 # Sidebar for connection
 with st.sidebar:
@@ -229,7 +482,7 @@ with st.sidebar:
         send_command(f"tool {selected_tool}")
 
 # Main content tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Preset Motions", "Cartesian Control (IK)", "Joint Control (FK)", "Tool Station", "Stepper Motor"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Preset Motions", "Cartesian Control (IK)", "Joint Control (FK)", "Live Demo", "Tool Station", "Stepper Motor"])
 
 with tab1:
     st.header("Preset Poses & Motions")
@@ -248,24 +501,24 @@ with tab1:
     st.subheader("Complex Motions")
     c5, c6, c7, c8 = st.columns(4)
     with c5:
-        if st.button("Wave 👋", use_container_width=True): send_command("wave")
+        if st.button("Wave", use_container_width=True): send_command("wave")
     with c6:
-        if st.button("Hello 🖐", use_container_width=True): send_command("hello")
+        if st.button("Hello", use_container_width=True): send_command("hello")
     with c7:
-        if st.button("Handshake 🤝", use_container_width=True): send_command("handshake")
+        if st.button("Handshake", use_container_width=True): send_command("handshake")
     with c8:
-        if st.button("Stroke 🐈", use_container_width=True): send_command("stroke")
+        if st.button("Stroke", use_container_width=True): send_command("stroke")
         
     c9, c10, c11, c12 = st.columns(4)
     with c9:
-        if st.button("Pick & Place 📦", use_container_width=True): send_command("pickplace")
+        if st.button("Pick & Place", use_container_width=True): send_command("pickplace")
     with c10:
-        if st.button("Front Pick 🔽", use_container_width=True): send_command("frontpick")
+        if st.button("Front Pick", use_container_width=True): send_command("frontpick")
     with c11:
         if st.button("Run Active Tool", use_container_width=True): send_command("tool")
 
     with c12:
-        if st.button("Tool Status", use_container_width=True): send_command("status")
+        if st.button("Tool Status", use_container_width=True): send_command("status", expect_response=True)
 
     st.subheader("Gripper")
     cg1, cg2 = st.columns(2)
@@ -295,13 +548,6 @@ with tab3:
 
     use_number_inputs = st.checkbox("Use number input instead of sliders")
 
-    joint_limits = {
-        "pitch": ("Shoulder Pitch (S0)", -50.0, 130.0),
-        "roll": ("Shoulder Roll (S1)", 0.0, 160.0),
-        "yaw": ("Shoulder Yaw (S2)", -30.0, 150.0),
-        "elbow": ("Elbow Pitch (S3)", -55.0, 125.0),
-    }
-
     def joint_command_values(override_joint=None, override_value=0.0):
         values = {
             "pitch": st.session_state.pitch_val,
@@ -318,7 +564,7 @@ with tab3:
 
     colp, colr, colw, cole = st.columns(4)
     for col, joint in zip([colp, colr, colw, cole], ["pitch", "roll", "yaw", "elbow"]):
-        label, min_value, max_value = joint_limits[joint]
+        label, min_value, max_value = JOINT_LIMITS[joint]
         with col:
             if use_number_inputs:
                 joint_value = st.number_input(
@@ -355,6 +601,53 @@ with tab3:
             send_command("rest")
 
 with tab4:
+    st.header("Live Demo")
+    st.write("Move joint sliders and send joint offsets immediately while live mode is enabled.")
+
+    live_enabled = st.checkbox("Enable live joint control")
+    live_cols = st.columns(4)
+
+    for col, joint in zip(live_cols, ["pitch", "roll", "yaw", "elbow"]):
+        label, min_value, max_value = JOINT_LIMITS[joint]
+        with col:
+            live_value = st.slider(
+                label,
+                min_value=min_value,
+                max_value=max_value,
+                value=st.session_state[f"live_{joint}_val"],
+                step=1.0,
+                key=f"live_slider_{joint}",
+            )
+            st.session_state[f"live_{joint}_val"] = live_value
+
+    live_values = current_joint_values("live_")
+    live_command = joint_offset_command(live_values)
+
+    live_btn1, live_btn2, live_btn3 = st.columns(3)
+    with live_btn1:
+        if st.button("Sync From Joint Tab", use_container_width=True):
+            for name in ["pitch", "roll", "yaw", "elbow"]:
+                st.session_state[f"live_{name}_val"] = st.session_state[f"{name}_val"]
+    with live_btn2:
+        if st.button("Rest Live Pose", use_container_width=True):
+            for name in ["pitch", "roll", "yaw", "elbow"]:
+                st.session_state[f"live_{name}_val"] = 0.0
+            send_command("rest")
+            st.session_state.last_live_command = "rest"
+    with live_btn3:
+        if st.button("Send Current Live Pose", type="primary", use_container_width=True):
+            send_command(live_command)
+            st.session_state.last_live_command = live_command
+
+    if live_enabled:
+        if live_command != st.session_state.last_live_command:
+            send_command(live_command)
+            st.session_state.last_live_command = live_command
+        st.caption(f"Live command: {live_command}")
+    else:
+        st.caption("Live mode is disabled. Adjust sliders without moving the arm, then enable live mode or send manually.")
+
+with tab5:
     st.header("Tool Exchange Station")
     st.write("The station has 3 tools on a 360 degree plate. Each slot is 120 degrees apart.")
 
@@ -414,7 +707,7 @@ with tab4:
         if st.button("Release Tool: Magnet OFF", use_container_width=True):
             send_command("magnet off")
 
-with tab5:
+with tab6:
     st.header("Stepper Motor Control")
     st.write("Control the separated stepper motor (A4988 driver).")
     
@@ -435,5 +728,4 @@ with tab5:
 
 st.divider()
 if st.button("Request Arm Status"):
-    send_command("status")
-    st.info("Status command sent to ESP32. (Check physical serial monitor for output, or expand this UI later to read bi-directional serial).")
+    send_command("status", expect_response=True)

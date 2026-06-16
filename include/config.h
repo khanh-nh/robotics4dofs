@@ -46,6 +46,19 @@ const float toolChangeRoll = 0;
 const float toolChangeYaw = 0;
 const float toolChangeElbow = 0;
 
+// Tool docking protocol offsets, all in joint degrees.
+// Prechange keeps the arm near the station but curls elbow upward before docking.
+const float toolPrechangeElbowOffset = 50;
+
+// Small sequential search around the change pose before magnet attach.
+const float toolDockShakeDeg = 4;
+
+// Clearance moves after docking/release.
+const float toolMoveOutPitchOffset = 25;
+const float toolMoveOutElbowWithToolOffset = 25;
+const float toolMoveOutElbowNoToolOffset = -25;
+
+const int toolDockSlowDelayMs = 25;
 const int toolMagnetSettleMs = 500;
 const int toolStationSettleMs = 500;
 
@@ -102,7 +115,7 @@ const int servo3Max = 180;
 const float pitchMin = -50;
 const float pitchMax = 130;
 
-const float rollMin = 0;
+const float rollMin = -20;
 const float rollMax = 160;
 
 const float yawMin = -30;

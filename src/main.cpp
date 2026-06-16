@@ -8,6 +8,7 @@ void printHelp();
 bool parseFourValues(String command, int startIndex, float values[4]);
 bool parseThreeValues(String command, int startIndex, float values[3]);
 bool parseToolName(String toolText, ToolType &tool);
+bool parseGeometryCommand(String command, String &pointName, float values[3]);
 
 // =====================================================
 // Parse helpers
@@ -90,6 +91,19 @@ bool parseToolName(String toolText, ToolType &tool) {
   return false;
 }
 
+bool parseGeometryCommand(String command, String &pointName, float values[3]) {
+  int firstSpace = command.indexOf(' ');
+  if (firstSpace < 0) return false;
+
+  int secondSpace = command.indexOf(' ', firstSpace + 1);
+  if (secondSpace < 0) return false;
+
+  pointName = command.substring(firstSpace + 1, secondSpace);
+  pointName.trim();
+
+  return parseThreeValues(command, secondSpace + 1, values);
+}
+
 // =====================================================
 // Help menu
 // =====================================================
@@ -130,6 +144,11 @@ void printHelp() {
   Serial.println("q pitch roll yaw elbow    Example: q 90 80 70 60");
   Serial.println("fk pitch roll yaw elbow   Example: fk 90 80 70 60");
   Serial.println("go x y z                  Example: go 120 160 250");
+  Serial.println("geom                      Print runtime geometry config");
+  Serial.println("geom p01 x y z            Example: geom p34 0 25 -140");
+  Serial.println("changepose                Print tool exchange pose");
+  Serial.println("changepose p r y e        Example: changepose 0 -10 0 20");
+  Serial.println("goto changepose           Move arm to tool exchange pose");
   Serial.println("tool                      Run active tool");
   Serial.println("tool gripper|vacuum|drill|none");
   Serial.println("pickup gripper|vacuum|drill");
@@ -209,6 +228,46 @@ void loop() {
       Serial.println("] deg");
       printFK(currentPitch, currentRoll, currentYaw, currentElbow);
       printToolStatus();
+      return;
+    }
+
+    if (command == "geom") {
+      printGeometryConfig();
+      return;
+    }
+
+    if (command == "changepose") {
+      printToolChangePose();
+      return;
+    }
+
+    if (command == "goto changepose") {
+      moveToToolChangePose();
+      return;
+    }
+
+    if (command.startsWith("changepose ")) {
+      float values[4];
+
+      if (parseFourValues(command, 11, values)) {
+        setToolChangePose(values[0], values[1], values[2], values[3]);
+      } else {
+        Serial.println("Invalid changepose command. Use: changepose pitch roll yaw elbow");
+      }
+      return;
+    }
+
+    if (command.startsWith("geom ")) {
+      String pointName;
+      float values[3];
+
+      if (parseGeometryCommand(command, pointName, values)) {
+        char pointNameBuffer[12];
+        pointName.toCharArray(pointNameBuffer, sizeof(pointNameBuffer));
+        setGeometryPoint(pointNameBuffer, values[0], values[1], values[2]);
+      } else {
+        Serial.println("Invalid geom command. Use: geom base|p01|p12|p23|p34 x y z");
+      }
       return;
     }
 

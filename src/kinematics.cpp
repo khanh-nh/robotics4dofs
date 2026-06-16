@@ -3,6 +3,13 @@
 #include "robot_control.h"
 #include <math.h>
 #include <Arduino.h>
+#include <string.h>
+
+static float runtimeBasePoint[3] = {basePoint[0], basePoint[1], basePoint[2]};
+static float runtimeP01[3] = {P01[0], P01[1], P01[2]};
+static float runtimeP12[3] = {P12[0], P12[1], P12[2]};
+static float runtimeP23[3] = {P23[0], P23[1], P23[2]};
+static float runtimeP34[3] = {P34[0], P34[1], P34[2]};
 
 float degToRad(float deg) {
   return deg * PI / 180.0;
@@ -91,25 +98,77 @@ Mat3 rotZ(float deg) {
 
 Vec3 calculateFK(float pitchDeg, float rollDeg, float yawDeg, float elbowDeg) {
   Vec3 p;
-  p.x = basePoint[0];
-  p.y = basePoint[1];
-  p.z = basePoint[2];
+  p.x = runtimeBasePoint[0];
+  p.y = runtimeBasePoint[1];
+  p.z = runtimeBasePoint[2];
 
   Mat3 R = identityMat();
 
   R = matMul(R, rotY(-pitchDeg));
-  p = vecAdd(p, matVecMul(R, makeVec(P01)));
+  p = vecAdd(p, matVecMul(R, makeVec(runtimeP01)));
 
   R = matMul(R, rotX(rollDeg));
-  p = vecAdd(p, matVecMul(R, makeVec(P12)));
+  p = vecAdd(p, matVecMul(R, makeVec(runtimeP12)));
 
   R = matMul(R, rotZ(yawDeg));
-  p = vecAdd(p, matVecMul(R, makeVec(P23)));
+  p = vecAdd(p, matVecMul(R, makeVec(runtimeP23)));
 
   R = matMul(R, rotY(-elbowDeg));
-  p = vecAdd(p, matVecMul(R, makeVec(P34)));
+  p = vecAdd(p, matVecMul(R, makeVec(runtimeP34)));
 
   return p;
+}
+
+static void printPoint(const char *name, const float point[3]) {
+  Serial.print(name);
+  Serial.print(" = [");
+  Serial.print(point[0], 2);
+  Serial.print(", ");
+  Serial.print(point[1], 2);
+  Serial.print(", ");
+  Serial.print(point[2], 2);
+  Serial.println("]");
+}
+
+bool setGeometryPoint(const char *pointName, float x, float y, float z) {
+  float *point = nullptr;
+
+  if (strcmp(pointName, "base") == 0 || strcmp(pointName, "basePoint") == 0) {
+    point = runtimeBasePoint;
+  } else if (strcmp(pointName, "p01") == 0 || strcmp(pointName, "P01") == 0) {
+    point = runtimeP01;
+  } else if (strcmp(pointName, "p12") == 0 || strcmp(pointName, "P12") == 0) {
+    point = runtimeP12;
+  } else if (strcmp(pointName, "p23") == 0 || strcmp(pointName, "P23") == 0) {
+    point = runtimeP23;
+  } else if (strcmp(pointName, "p34") == 0 || strcmp(pointName, "P34") == 0) {
+    point = runtimeP34;
+  }
+
+  if (point == nullptr) {
+    Serial.println("Invalid geometry point. Use base, p01, p12, p23, or p34.");
+    return false;
+  }
+
+  point[0] = x;
+  point[1] = y;
+  point[2] = z;
+
+  Serial.print("Updated geometry ");
+  Serial.println(pointName);
+  printGeometryConfig();
+  return true;
+}
+
+void printGeometryConfig() {
+  Serial.println();
+  Serial.println("Current geometry config [mm]:");
+  printPoint("base", runtimeBasePoint);
+  printPoint("p01", runtimeP01);
+  printPoint("p12", runtimeP12);
+  printPoint("p23", runtimeP23);
+  printPoint("p34", runtimeP34);
+  Serial.println();
 }
 
 void printFK(float pitch, float roll, float yaw, float elbow) {

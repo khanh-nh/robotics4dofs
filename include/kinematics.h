@@ -22,6 +22,8 @@ Mat3 rotZ(float deg);
 
 Vec3 calculateFK(float pitchDeg, float rollDeg, float yawDeg, float elbowDeg);
 void printFK(float pitch, float roll, float yaw, float elbow);
+bool setGeometryPoint(const char *pointName, float x, float y, float z);
+void printGeometryConfig();
 
 float positionErrorSq(Vec3 target, float q[4]);
 float solveIKFromSeed(Vec3 target, float seed[4], float solution[4]);
