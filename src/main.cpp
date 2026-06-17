@@ -73,8 +73,8 @@ bool parseToolName(String toolText, ToolType &tool) {
     return true;
   }
 
-  if (toolText == "vacuum" || toolText == "pump" || toolText == "2") {
-    tool = TOOL_VACUUM;
+  if (toolText == "hand" || toolText == "static" || toolText == "model" || toolText == "2") {
+    tool = TOOL_HAND;
     return true;
   }
 
@@ -141,6 +141,7 @@ void printHelp() {
 
   Serial.println("Commands:");
   Serial.println("rest");
+  Serial.println("servotest                 Test raw PWM on arm servos S0-S3");
   Serial.println("q pitch roll yaw elbow    Example: q 90 80 70 60");
   Serial.println("fk pitch roll yaw elbow   Example: fk 90 80 70 60");
   Serial.println("go x y z                  Example: go 120 160 250");
@@ -150,16 +151,17 @@ void printHelp() {
   Serial.println("changepose p r y e        Example: changepose 0 -10 0 20");
   Serial.println("goto changepose           Move arm to tool exchange pose");
   Serial.println("tool                      Run active tool");
-  Serial.println("tool gripper|vacuum|drill|none");
-  Serial.println("pickup gripper|vacuum|drill");
-  Serial.println("change gripper|vacuum|drill   Uses remembered held tool");
-  Serial.println("change old new                 Example: change gripper vacuum");
+  Serial.println("tool gripper|hand|drill|none");
+  Serial.println("pickup gripper|hand|drill");
+  Serial.println("change gripper|hand|drill      Uses remembered held tool");
+  Serial.println("change old new                 Example: change gripper hand");
   Serial.println("remove tool                    Return held tool to station");
+  Serial.println("showcase                       Pick, run, return each tool, then rest");
   Serial.println("gripper open|close");
   Serial.println("magnet on|off             Relay 1: electric magnet tool lock");
-  Serial.println("toolpower on|off          Relay 2: pogo VCC. Off stops pump/drill.");
+  Serial.println("toolpower on|off          Relay 2: pogo VCC. Off stops drill/gripper.");
   Serial.println("station 0|1|2             Rotate exchange station to tool slot");
-  Serial.println("station gripper|vacuum|drill");
+  Serial.println("station gripper|hand|drill");
   Serial.println("speed value               Example: speed 10");
   Serial.println("all s0 s1 s2 s3           Example: all 135 20 150 125");
   Serial.println();
@@ -276,6 +278,11 @@ void loop() {
       return;
     }
 
+    if (command == "servotest") {
+      testArmServos();
+      return;
+    }
+
     if (command == "tool") {
       toolMotion();
       return;
@@ -318,7 +325,7 @@ void loop() {
       if (parseToolName(toolText, tool)) {
         setActiveTool(tool);
       } else {
-        Serial.println("Invalid tool command. Use: tool gripper|vacuum|drill|none");
+        Serial.println("Invalid tool command. Use: tool gripper|hand|drill|none");
       }
       return;
     }
@@ -330,7 +337,7 @@ void loop() {
       if (parseToolName(toolText, tool) && tool != TOOL_NONE) {
         pickupTool(tool);
       } else {
-        Serial.println("Invalid pickup command. Use: pickup gripper|vacuum|drill");
+        Serial.println("Invalid pickup command. Use: pickup gripper|hand|drill");
       }
       return;
     }
@@ -350,7 +357,7 @@ void loop() {
         if (parseToolName(args, newTool) && newTool != TOOL_NONE) {
           changeHeldTool(newTool);
         } else {
-          Serial.println("Invalid change command. Use: change gripper|vacuum|drill");
+          Serial.println("Invalid change command. Use: change gripper|hand|drill");
         }
       } else {
         String oldText = args.substring(0, spaceIndex);
@@ -380,8 +387,8 @@ void loop() {
 
       if (stationText == "gripper") {
         rotateToolStationToSlot(toolSlotGripper);
-      } else if (stationText == "vacuum") {
-        rotateToolStationToSlot(toolSlotVacuum);
+      } else if (stationText == "hand") {
+        rotateToolStationToSlot(toolSlotHand);
       } else if (stationText == "drill") {
         rotateToolStationToSlot(toolSlotDrill);
       } else {
@@ -389,7 +396,7 @@ void loop() {
         if (slot >= 0 && slot < toolStationSlots) {
           rotateToolStationToSlot(slot);
         } else {
-          Serial.println("Invalid station command. Use: station 0|1|2 or station gripper|vacuum|drill");
+          Serial.println("Invalid station command. Use: station 0|1|2 or station gripper|hand|drill");
         }
       }
       return;
@@ -397,10 +404,7 @@ void loop() {
 
     if (command.startsWith("speed ")) {
       int newSpeed = command.substring(6).toInt();
-      stepDelayMs = constrain(newSpeed, 5, 60);
-      Serial.print("Speed updated. stepDelayMs = ");
-      Serial.println(stepDelayMs);
-      Serial.println("Smaller value = faster motion.");
+      setMotionSpeed(newSpeed);
       return;
     }
 
@@ -480,6 +484,11 @@ void loop() {
 
     if (command == "frontpick") {
       frontPickMotion();
+      return;
+    }
+
+    if (command == "showcase") {
+      showcaseTools();
       return;
     }
 

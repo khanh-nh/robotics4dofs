@@ -15,13 +15,13 @@ const int toolServoPin = 27; // tool / gripper / EE servo
 // =====================================================
 const int stepperStepPin = 14;
 const int stepperDirPin  = 12;
-const int stepperStepsPerRev = 3200; // 1.8 degree step with 1/16 microstepping (200 * 16)
+const int stepperStepsPerRev = 6400; // 1.8 degree step with 1/16 microstepping (200 * 16)
 
 
 // Relay Settings
 // =====================================================
 const int magnetRelayPin = 21;    // Relay 1: electric magnet tool lock
-const int toolPowerRelayPin = 19; // Relay 2: pogo VCC for gripper/pump/drill
+const int toolPowerRelayPin = 19; // Relay 2: pogo VCC for gripper/drill
 
 // Backward-compatible alias for older code/commands.
 const int relayPin = magnetRelayPin;
@@ -36,22 +36,28 @@ const int toolStationSlots = 3;
 const float toolStationStepDeg = 120.0;
 
 const int toolSlotGripper = 0;
-const int toolSlotVacuum = 1;
-const int toolSlotDrill = 2;
+const int toolSlotHand = 2;
+const int toolSlotDrill = 1;
 
 // Tool exchange arm pose, expressed as joint angles relative to rest.
 // Start near rest; tune these once the physical station position is fixed.
-const float toolChangePitch = 0;
+const float toolChangePitch = -3;
 const float toolChangeRoll = 0;
 const float toolChangeYaw = 0;
-const float toolChangeElbow = 0;
+const float toolChangeElbow = -3;
+
+// Normal rest pose for the arm, expressed as joint angles relative to raw servo rest.
+const float armRestPitch = 0;
+const float armRestRoll = 0;
+const float armRestYaw = 0;
+const float armRestElbow = 50;
 
 // Tool docking protocol offsets, all in joint degrees.
 // Prechange keeps the arm near the station but curls elbow upward before docking.
 const float toolPrechangeElbowOffset = 50;
 
-// Small sequential search around the change pose before magnet attach.
-const float toolDockShakeDeg = 4;
+// Small sequential settling shake around the change pose after magnet attach.
+const float toolDockShakeDeg = 2;
 
 // Clearance moves after docking/release.
 const float toolMoveOutPitchOffset = 25;
@@ -59,8 +65,17 @@ const float toolMoveOutElbowWithToolOffset = 25;
 const float toolMoveOutElbowNoToolOffset = -25;
 
 const int toolDockSlowDelayMs = 25;
+const int toolDockFinalElbowDelayMs = 50;
 const int toolMagnetSettleMs = 500;
+const int toolPowerSettleMs = 250;
 const int toolStationSettleMs = 500;
+const int toolPickupTestRunMs = 2000;
+const int toolShowcaseRunMs = 3000;
+const int gripperServoMoveMs = 600;
+const float toolReturnStationNudgeDeg = 3.0;
+const float toolReturnStationOscillationDeg = 5.0;
+const int toolReturnStationOscillationCycles = 3;
+const float toolReturnOscillationElbowOffset = 20;
 
 // =====================================================
 // Servo PWM settings
@@ -73,8 +88,8 @@ const int maxPulse = 2400;
 // Normal servo: 90 = rest, 150 = active
 // Continuous servo: 90 = stop, 150/180 = rotate
 // =====================================================
-const int toolServoRestAngle = 180;
-const int toolServoRunAngle  = 150;
+const int toolServoRestAngle = 130;
+const int toolServoRunAngle  = 180;
 const int toolRunTimeMs      = 700;
 
 // =====================================================
@@ -82,7 +97,7 @@ const int toolRunTimeMs      = 700;
 // =====================================================
 const int servo0Rest = 130; // shoulder pitch 126
 const int servo1Rest = 17;  // shoulder roll 15
-const int servo2Rest = 150; // shoulder yaw
+const int servo2Rest = 147; // shoulder yaw
 const int servo3Rest = 127; // elbow pitch
 
 // =====================================================

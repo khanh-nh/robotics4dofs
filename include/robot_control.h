@@ -20,11 +20,12 @@ extern float currentYaw;
 extern float currentElbow;
 
 extern int stepDelayMs;
+extern int normalStepDelayMs;
 
 enum ToolType {
   TOOL_NONE = -1,
   TOOL_GRIPPER = 0,
-  TOOL_VACUUM = 1,
+  TOOL_HAND = 1,
   TOOL_DRILL = 2
 };
 
@@ -37,12 +38,14 @@ void setupRelays();
 void moveStepper(float degrees);
 void rotateToolStationToSlot(int targetSlot);
 bool setActiveTool(ToolType tool);
+void setMotionSpeed(int speedMs);
 const char *toolName(ToolType tool);
 int toolSlot(ToolType tool);
 float clampJoint(int jointID, float value);
 int clampServoAngle(int servoID, int angle);
 
 void printCurrentServoAngles();
+void testArmServos();
 void moveToRestPose();
 void moveAllSlow(int target0, int target1, int target2, int target3);
 void moveJointAngles(float pitch, float roll, float yaw, float elbow);
@@ -62,6 +65,8 @@ void moveOutFromDockNoTool();
 bool pickupTool(ToolType newTool);
 bool removeHeldTool();
 bool changeHeldTool(ToolType newTool);
+void testPickedTool(ToolType tool);
+void showcaseTools();
 void gripperOpen();
 void gripperClose();
 void toolMotion();

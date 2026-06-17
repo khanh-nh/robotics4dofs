@@ -18,8 +18,10 @@ float currentYaw   = 0;
 float currentElbow = 0;
 
 int stepDelayMs = 15;
+int normalStepDelayMs = 15;
 ToolType activeTool = TOOL_NONE;
 int currentToolStationSlot = toolSlotGripper;
+bool toolPowerEnabled = false;
 float currentToolChangePitch = toolChangePitch;
 float currentToolChangeRoll = toolChangeRoll;
 float currentToolChangeYaw = toolChangeYaw;
@@ -136,37 +138,79 @@ void rotateToolStationToSlot(int targetSlot) {
   currentToolStationSlot = targetSlot;
 }
 
+static bool needsReturnStationNudge(ToolType tool) {
+  return tool == TOOL_DRILL || tool == TOOL_GRIPPER;
+}
+
+static void nudgeStationForToolReturn(ToolType tool, bool beforeDocking) {
+  float nudgeDegrees = beforeDocking ? toolReturnStationNudgeDeg : -toolReturnStationNudgeDeg;
+
+  Serial.print(beforeDocking ? "Nudging station for tool return: " : "Rolling station back after tool return: ");
+  Serial.print(toolName(tool));
+  Serial.print(" ");
+  Serial.print(nudgeDegrees);
+  Serial.println(" deg.");
+
+  moveStepper(nudgeDegrees);
+  delay(toolStationSettleMs);
+}
+
+static void oscillateStationForToolReturn() {
+  Serial.println("Oscillating station to settle returned tool.");
+
+  for (int i = 0; i < toolReturnStationOscillationCycles; i++) {
+    moveStepper(toolReturnStationOscillationDeg);
+    moveStepper(-2.0 * toolReturnStationOscillationDeg);
+    moveStepper(toolReturnStationOscillationDeg);
+  }
+
+  delay(toolStationSettleMs);
+}
+
 const char *toolName(ToolType tool) {
   if (tool == TOOL_GRIPPER) return "gripper";
-  if (tool == TOOL_VACUUM) return "vacuum";
+  if (tool == TOOL_HAND) return "hand";
   if (tool == TOOL_DRILL) return "drill";
   return "none";
 }
 
 int toolSlot(ToolType tool) {
   if (tool == TOOL_GRIPPER) return toolSlotGripper;
-  if (tool == TOOL_VACUUM) return toolSlotVacuum;
+  if (tool == TOOL_HAND) return toolSlotHand;
   if (tool == TOOL_DRILL) return toolSlotDrill;
   return -1;
 }
 
 bool setActiveTool(ToolType tool) {
-  if (tool != TOOL_NONE && tool != TOOL_GRIPPER && tool != TOOL_VACUUM && tool != TOOL_DRILL) {
+  if (tool != TOOL_NONE && tool != TOOL_GRIPPER && tool != TOOL_HAND && tool != TOOL_DRILL) {
     Serial.println("Invalid tool.");
     return false;
   }
 
   activeTool = tool;
 
-  if (activeTool == TOOL_NONE) {
+  if (activeTool == TOOL_NONE || activeTool == TOOL_HAND) {
     setToolPower(false);
   } else {
     setToolPower(true);
   }
 
+  stepDelayMs = normalStepDelayMs;
+
   Serial.print("Active tool set to: ");
   Serial.println(toolName(activeTool));
   return true;
+}
+
+void setMotionSpeed(int speedMs) {
+  normalStepDelayMs = constrain(speedMs, 5, 60);
+  stepDelayMs = normalStepDelayMs;
+
+  Serial.print("Speed updated. normalStepDelayMs = ");
+  Serial.println(normalStepDelayMs);
+  Serial.print("Current stepDelayMs = ");
+  Serial.println(stepDelayMs);
+  Serial.println("Smaller value = faster motion.");
 }
 
 void moveToToolChangePose() {
@@ -193,14 +237,26 @@ void moveToToolPrechangePose() {
   delay(toolStationSettleMs);
 }
 
+static void moveToToolReturnOscillationPose() {
+  Serial.println("Moving to partial return pose for station oscillation...");
+  moveJointAnglesWithDelay(
+    currentToolChangePitch,
+    currentToolChangeRoll,
+    currentToolChangeYaw,
+    clampJoint(3, currentToolChangeElbow + toolReturnOscillationElbowOffset),
+    toolDockSlowDelayMs
+  );
+  delay(toolStationSettleMs);
+}
+
 void moveIntoToolDockSlow() {
-  Serial.println("Docking slowly from prechange to tool exchange pose...");
+  Serial.println("Docking slowly from prechange to tool exchange pose with slower final elbow approach...");
   moveJointAnglesWithDelay(
     currentToolChangePitch,
     currentToolChangeRoll,
     currentToolChangeYaw,
     currentToolChangeElbow,
-    toolDockSlowDelayMs
+    toolDockFinalElbowDelayMs
   );
   delay(toolStationSettleMs);
 }
@@ -282,6 +338,19 @@ void printToolChangePose() {
   Serial.println("] deg");
 }
 
+static void prepareToolForReturn(ToolType tool) {
+  Serial.print("Preparing tool for return: ");
+  Serial.println(toolName(tool));
+
+  if (tool == TOOL_GRIPPER) {
+    gripperClose();
+    delay(300);
+  }
+
+  setToolPower(false);
+  delay(toolStationSettleMs);
+}
+
 bool pickupTool(ToolType newTool) {
   int newSlot = toolSlot(newTool);
   if (newSlot < 0) {
@@ -304,12 +373,13 @@ bool pickupTool(ToolType newTool) {
   rotateToolStationToSlot(newSlot);
   moveToToolPrechangePose();
   moveIntoToolDockSlow();
-  shakeToolDockPose();
-  delay(toolStationSettleMs);
   setMagnet(true);
   delay(toolMagnetSettleMs);
-  setActiveTool(newTool);
+  shakeToolDockPose();
+  delay(toolStationSettleMs);
   moveOutFromDockWithTool();
+  setActiveTool(newTool);
+  testPickedTool(newTool);
   printToolStatus();
   return true;
 }
@@ -326,8 +396,14 @@ bool removeHeldTool() {
   Serial.print("Removing held tool: ");
   Serial.println(toolName(oldTool));
 
+  prepareToolForReturn(oldTool);
   moveToToolPrechangePose();
   rotateToolStationToSlot(oldSlot);
+  if (needsReturnStationNudge(oldTool)) {
+    nudgeStationForToolReturn(oldTool, true);
+  }
+  moveToToolReturnOscillationPose();
+  oscillateStationForToolReturn();
   moveIntoToolDockSlow();
   setToolPower(false);
   delay(toolStationSettleMs);
@@ -335,6 +411,9 @@ bool removeHeldTool() {
   delay(toolMagnetSettleMs);
   setActiveTool(TOOL_NONE);
   moveOutFromDockNoTool();
+  if (needsReturnStationNudge(oldTool)) {
+    nudgeStationForToolReturn(oldTool, false);
+  }
   printToolStatus();
   return true;
 }
@@ -365,8 +444,14 @@ bool changeHeldTool(ToolType newTool) {
   Serial.print(" -> ");
   Serial.println(toolName(newTool));
 
+  prepareToolForReturn(oldTool);
   moveToToolPrechangePose();
   rotateToolStationToSlot(oldSlot);
+  if (needsReturnStationNudge(oldTool)) {
+    nudgeStationForToolReturn(oldTool, true);
+  }
+  moveToToolReturnOscillationPose();
+  oscillateStationForToolReturn();
   moveIntoToolDockSlow();
   setToolPower(false);
   delay(toolStationSettleMs);
@@ -374,16 +459,20 @@ bool changeHeldTool(ToolType newTool) {
   delay(toolMagnetSettleMs);
   activeTool = TOOL_NONE;
   moveOutFromDockNoTool();
+  if (needsReturnStationNudge(oldTool)) {
+    nudgeStationForToolReturn(oldTool, false);
+  }
 
   rotateToolStationToSlot(newSlot);
   moveToToolPrechangePose();
   moveIntoToolDockSlow();
-  shakeToolDockPose();
-  delay(toolStationSettleMs);
   setMagnet(true);
   delay(toolMagnetSettleMs);
-  setActiveTool(newTool);
+  shakeToolDockPose();
+  delay(toolStationSettleMs);
   moveOutFromDockWithTool();
+  setActiveTool(newTool);
+  testPickedTool(newTool);
   printToolStatus();
   return true;
 }
@@ -509,14 +598,8 @@ void moveJointAngles(float pitch, float roll, float yaw, float elbow) {
 
 void moveToRestPose() {
   Serial.println("Moving to rest pose...");
-  moveAllSlow(servo0Rest, servo1Rest, servo2Rest, servo3Rest);
+  moveJointAngles(armRestPitch, armRestRoll, armRestYaw, armRestElbow);
 
-  currentPitch = 0;
-  currentRoll  = 0;
-  currentYaw   = 0;
-  currentElbow = 0;
-
-  printFK(0, 0, 0, 0);
   Serial.println("Rest pose done.");
 }
 
@@ -528,6 +611,53 @@ void printCurrentServoAngles() {
   Serial.print(", S3 = "); Serial.println(servo3Angle);
 }
 
+void testArmServos() {
+  Serial.println("Arm servo diagnostic started.");
+  Serial.println("Testing raw PWM on S0-S3 around rest pose.");
+
+  moveAllSlow(servo0Rest, servo1Rest, servo2Rest, servo3Rest);
+  delay(500);
+
+  Serial.println("Testing S0 shoulder pitch...");
+  moveServoSlow(servo0, servo0Angle, servo0Rest + 10, 0);
+  delay(300);
+  moveServoSlow(servo0, servo0Angle, servo0Rest - 10, 0);
+  delay(300);
+  moveServoSlow(servo0, servo0Angle, servo0Rest, 0);
+  delay(300);
+
+  Serial.println("Testing S1 shoulder roll...");
+  moveServoSlow(servo1, servo1Angle, servo1Rest + 10, 1);
+  delay(300);
+  moveServoSlow(servo1, servo1Angle, servo1Rest - 10, 1);
+  delay(300);
+  moveServoSlow(servo1, servo1Angle, servo1Rest, 1);
+  delay(300);
+
+  Serial.println("Testing S2 shoulder yaw...");
+  moveServoSlow(servo2, servo2Angle, servo2Rest + 10, 2);
+  delay(300);
+  moveServoSlow(servo2, servo2Angle, servo2Rest - 10, 2);
+  delay(300);
+  moveServoSlow(servo2, servo2Angle, servo2Rest, 2);
+  delay(300);
+
+  Serial.println("Testing S3 elbow pitch...");
+  moveServoSlow(servo3, servo3Angle, servo3Rest + 10, 3);
+  delay(300);
+  moveServoSlow(servo3, servo3Angle, servo3Rest - 10, 3);
+  delay(300);
+  moveServoSlow(servo3, servo3Angle, servo3Rest, 3);
+
+  currentPitch = 0;
+  currentRoll = 0;
+  currentYaw = 0;
+  currentElbow = 0;
+
+  Serial.println("Arm servo diagnostic done.");
+  printCurrentServoAngles();
+}
+
 void setMagnet(bool enabled) {
   digitalWrite(magnetRelayPin, enabled ? HIGH : LOW);
   Serial.print("Magnet relay 1 is ");
@@ -536,6 +666,11 @@ void setMagnet(bool enabled) {
 
 void setToolPower(bool enabled) {
   digitalWrite(toolPowerRelayPin, enabled ? HIGH : LOW);
+  if (enabled && !toolPowerEnabled) {
+    delay(toolPowerSettleMs);
+  }
+  toolPowerEnabled = enabled;
+
   Serial.print("Tool power relay 2 is ");
   Serial.println(enabled ? "ON" : "OFF");
 }
@@ -545,7 +680,7 @@ void printToolStatus() {
   Serial.println(toolName(activeTool));
   Serial.print("Tool station slot: ");
   Serial.println(currentToolStationSlot);
-  Serial.println("Slots: 0=gripper, 1=vacuum, 2=drill");
+  Serial.println("Slots: 0=gripper, 1=drill, 2=hand");
 }
 
 void gripperOpen() {
@@ -554,6 +689,7 @@ void gripperOpen() {
   }
   setToolPower(true);
   toolServo.write(toolServoRestAngle);
+  delay(gripperServoMoveMs);
   Serial.println("Gripper open/rest command sent.");
 }
 
@@ -563,16 +699,89 @@ void gripperClose() {
   }
   setToolPower(true);
   toolServo.write(toolServoRunAngle);
+  delay(gripperServoMoveMs);
   Serial.println("Gripper close/run command sent.");
+}
+
+void testPickedTool(ToolType tool) {
+  Serial.print("Testing picked tool: ");
+  Serial.println(toolName(tool));
+
+  if (tool == TOOL_GRIPPER) {
+    gripperOpen();
+    gripperClose();
+    gripperOpen();
+  } else if (tool == TOOL_HAND) {
+    Serial.println("Static hand model attached. No powered tool test needed.");
+  } else if (tool == TOOL_DRILL) {
+    setToolPower(true);
+    delay(toolPickupTestRunMs);
+    setToolPower(false);
+  }
+
+  Serial.println("Picked tool test done.");
+}
+
+static void runShowcaseTool(ToolType tool) {
+  if (!pickupTool(tool)) {
+    return;
+  }
+
+  Serial.print("Showcasing tool: ");
+  Serial.println(toolName(tool));
+
+  if (tool == TOOL_GRIPPER) {
+    gripperClose();
+    gripperOpen();
+  } else if (tool == TOOL_HAND) {
+    moveJointAngles(0, 100, 90, 100);
+    delay(500);
+    moveJointAngles(0, 60, 70, 100);
+    delay(500);
+    moveToRestPose();
+  } else if (tool == TOOL_DRILL) {
+    setToolPower(true);
+    delay(toolShowcaseRunMs);
+    setToolPower(false);
+  }
+
+  removeHeldTool();
+}
+
+void showcaseTools() {
+  Serial.println("Tool showcase sequence started.");
+
+  if (activeTool != TOOL_NONE) {
+    Serial.println("Returning currently held tool before showcase.");
+    removeHeldTool();
+  }
+
+  runShowcaseTool(TOOL_GRIPPER);
+  runShowcaseTool(TOOL_HAND);
+  runShowcaseTool(TOOL_DRILL);
+
+  if (activeTool != TOOL_NONE) {
+    removeHeldTool();
+  }
+
+  moveToRestPose();
+  Serial.println("Tool showcase sequence done.");
 }
 
 void toolMotion() {
   Serial.println("Tool motion started.");
 
-  if (activeTool == TOOL_VACUUM || activeTool == TOOL_DRILL) {
+  if (activeTool == TOOL_DRILL) {
     setToolPower(true);
     Serial.print(toolName(activeTool));
     Serial.println(" is running. Use 'toolpower off' to stop it.");
+  } else if (activeTool == TOOL_HAND) {
+    Serial.println("Running static hand hello gesture.");
+    moveJointAngles(0, 100, 90, 100);
+    delay(500);
+    moveJointAngles(0, 60, 70, 100);
+    delay(500);
+    moveToRestPose();
   } else {
     if (activeTool == TOOL_NONE) {
       Serial.println("No active tool selected. Running gripper servo as fallback.");

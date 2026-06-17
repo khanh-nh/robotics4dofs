@@ -29,8 +29,9 @@ for joint_name in ["pitch", "roll", "yaw", "elbow"]:
         st.session_state[f"live_{joint_name}_val"] = 0.0
 
 # --- Helper functions ---
-TOOL_SLOTS = {"gripper": 0, "vacuum": 1, "pump": 1, "drill": 2}
-SLOT_TOOLS = {0: "Gripper", 1: "Vacuum", 2: "Drill"}
+TOOL_SLOTS = {"gripper": 0, "hand": 2, "drill": 1}
+SLOT_TOOLS = {0: "Gripper", 1: "Drill", 2: "Hand"}
+ARM_REST_POSE = {"pitch": 0.0, "roll": 0.0, "yaw": 0.0, "elbow": 50.0}
 JOINT_LIMITS = {
     "pitch": ("Shoulder Pitch (S0)", -50.0, 130.0),
     "roll": ("Shoulder Roll (S1)", -20.0, 160.0),
@@ -52,10 +53,10 @@ for point_name, coords in GEOMETRY_DEFAULTS.items():
             st.session_state[key] = default_value
 
 TOOL_CHANGE_POSE_DEFAULTS = {
-    "pitch": 0.0,
+    "pitch": -3.0,
     "roll": 0.0,
     "yaw": 0.0,
-    "elbow": 0.0,
+    "elbow": -3.0,
 }
 
 for joint_name, default_value in TOOL_CHANGE_POSE_DEFAULTS.items():
@@ -71,8 +72,8 @@ def normalize_tool_name(tool):
     tool = tool.strip().lower()
     if tool in ["1", "gripper"]:
         return "gripper"
-    if tool in ["2", "vacuum", "pump"]:
-        return "vacuum"
+    if tool in ["2", "hand", "static", "model"]:
+        return "hand"
     if tool in ["3", "drill", "dc", "motor"]:
         return "drill"
     if tool in ["0", "none"]:
@@ -156,7 +157,7 @@ def remember_command_state(cmd):
         tool = normalize_tool_name(parts[1])
         if tool:
             st.session_state.held_tool = tool
-            st.session_state.tool_power_on = tool != "none"
+            st.session_state.tool_power_on = tool not in ["none", "hand"]
         return
 
     if parts[0] == "pickup" and len(parts) >= 2:
@@ -165,7 +166,7 @@ def remember_command_state(cmd):
             st.session_state.held_tool = tool
             st.session_state.station_slot = TOOL_SLOTS[tool]
             st.session_state.magnet_on = True
-            st.session_state.tool_power_on = True
+            st.session_state.tool_power_on = tool != "hand"
         return
 
     if parts[0] == "change" and len(parts) >= 2:
@@ -174,7 +175,7 @@ def remember_command_state(cmd):
             st.session_state.held_tool = target
             st.session_state.station_slot = TOOL_SLOTS[target]
             st.session_state.magnet_on = True
-            st.session_state.tool_power_on = True
+            st.session_state.tool_power_on = target != "hand"
         return
 
     if cmd in ["remove tool", "remove", "drop tool"]:
@@ -186,15 +187,13 @@ def remember_command_state(cmd):
         return
 
     if cmd == "tool":
-        if st.session_state.held_tool in ["gripper", "vacuum", "drill"]:
-            st.session_state.tool_power_on = True
+        if st.session_state.held_tool in ["gripper", "hand", "drill"]:
+            st.session_state.tool_power_on = st.session_state.held_tool != "hand"
         return
 
     if cmd == "rest":
-        st.session_state.pitch_val = 0.0
-        st.session_state.roll_val = 0.0
-        st.session_state.yaw_val = 0.0
-        st.session_state.elbow_val = 0.0
+        for joint_name, rest_value in ARM_REST_POSE.items():
+            st.session_state[f"{joint_name}_val"] = rest_value
         return
 
     if parts[0] == "q" and len(parts) >= 5:
@@ -261,6 +260,22 @@ def status_card(label, value, state="neutral"):
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+def relay_toggle_changed(state_name, on_cmd, off_cmd, key):
+    desired_state = st.session_state[key]
+    if desired_state != st.session_state[state_name]:
+        send_command(on_cmd if desired_state else off_cmd)
+
+def relay_toggle(label, state_name, on_cmd, off_cmd, key):
+    if key not in st.session_state:
+        st.session_state[key] = st.session_state[state_name]
+
+    st.toggle(
+        label,
+        key=key,
+        on_change=relay_toggle_changed,
+        args=(state_name, on_cmd, off_cmd, key),
     )
 
 # --- UI Layout ---
@@ -463,21 +478,12 @@ with st.sidebar:
     st.divider()
     st.header("Tool Lock / Power")
     st.caption("Relay 1 = magnet lock. Relay 2 = pogo VCC for the current tool.")
-    col_relay1, col_relay2 = st.columns(2)
-    with col_relay1:
-        if st.button("Magnet ON", use_container_width=True):
-            send_command("magnet on")
-        if st.button("Power ON", use_container_width=True):
-            send_command("toolpower on")
-    with col_relay2:
-        if st.button("Magnet OFF", use_container_width=True):
-            send_command("magnet off")
-        if st.button("Power OFF", use_container_width=True):
-            send_command("toolpower off")
+    relay_toggle("Magnet", "magnet_on", "magnet on", "magnet off", "sidebar_magnet_toggle")
+    relay_toggle("Tool Power", "tool_power_on", "toolpower on", "toolpower off", "sidebar_power_toggle")
 
     st.divider()
     st.header("Active Tool")
-    selected_tool = st.selectbox("Tool", ["gripper", "vacuum", "drill", "none"])
+    selected_tool = st.selectbox("Tool", ["gripper", "hand", "drill", "none"])
     if st.button("Set Active Tool", use_container_width=True):
         send_command(f"tool {selected_tool}")
 
@@ -519,6 +525,9 @@ with tab1:
 
     with c12:
         if st.button("Tool Status", use_container_width=True): send_command("status", expect_response=True)
+
+    if st.button("Tool Showcase Sequence", type="primary", use_container_width=True):
+        send_command("showcase")
 
     st.subheader("Gripper")
     cg1, cg2 = st.columns(2)
@@ -594,11 +603,13 @@ with tab3:
             send_joint_offsets(joint_command_values())
     with c_rest_all:
         if st.button("Rest All Joints", use_container_width=True):
-            st.session_state.pitch_val = 0.0
-            st.session_state.roll_val = 0.0
-            st.session_state.yaw_val = 0.0
-            st.session_state.elbow_val = 0.0
+            for joint_name, rest_value in ARM_REST_POSE.items():
+                st.session_state[f"{joint_name}_val"] = rest_value
             send_command("rest")
+
+    st.divider()
+    if st.button("Run Arm Servo Diagnostic", use_container_width=True):
+        send_command("servotest", expect_response=True)
 
 with tab4:
     st.header("Live Demo")
@@ -630,8 +641,8 @@ with tab4:
                 st.session_state[f"live_{name}_val"] = st.session_state[f"{name}_val"]
     with live_btn2:
         if st.button("Rest Live Pose", use_container_width=True):
-            for name in ["pitch", "roll", "yaw", "elbow"]:
-                st.session_state[f"live_{name}_val"] = 0.0
+            for name, rest_value in ARM_REST_POSE.items():
+                st.session_state[f"live_{name}_val"] = rest_value
             send_command("rest")
             st.session_state.last_live_command = "rest"
     with live_btn3:
@@ -659,8 +670,8 @@ with tab5:
         if st.button("Change/Pick Gripper", use_container_width=True):
             send_command("change gripper")
     with ca2:
-        if st.button("Change/Pick Vacuum", use_container_width=True):
-            send_command("change vacuum")
+        if st.button("Change/Pick Hand", use_container_width=True):
+            send_command("change hand")
     with ca3:
         if st.button("Change/Pick Drill", use_container_width=True):
             send_command("change drill")
@@ -670,8 +681,8 @@ with tab5:
         if st.button("Initial Pickup Gripper", use_container_width=True):
             send_command("pickup gripper")
     with ci2:
-        if st.button("Initial Pickup Vacuum", use_container_width=True):
-            send_command("pickup vacuum")
+        if st.button("Initial Pickup Hand", use_container_width=True):
+            send_command("pickup hand")
     with ci3:
         if st.button("Initial Pickup Drill", use_container_width=True):
             send_command("pickup drill")
@@ -687,11 +698,11 @@ with tab5:
         if st.button("Slot 0: Gripper", use_container_width=True):
             send_command("station gripper")
     with cs2:
-        if st.button("Slot 1: Vacuum", use_container_width=True):
-            send_command("station vacuum")
-    with cs3:
-        if st.button("Slot 2: Drill", use_container_width=True):
+        if st.button("Slot 1: Drill", use_container_width=True):
             send_command("station drill")
+    with cs3:
+        if st.button("Slot 2: Hand", use_container_width=True):
+            send_command("station hand")
 
     station_slot = st.number_input("Station slot", min_value=0, max_value=2, value=0, step=1)
     if st.button("Rotate to Slot", type="primary", use_container_width=True):
@@ -699,13 +710,8 @@ with tab5:
 
     st.divider()
     st.write("Manual relay control for tool pickup/dropoff.")
-    cm1, cm2 = st.columns(2)
-    with cm1:
-        if st.button("Attach Tool: Magnet ON", use_container_width=True):
-            send_command("magnet on")
-    with cm2:
-        if st.button("Release Tool: Magnet OFF", use_container_width=True):
-            send_command("magnet off")
+    relay_toggle("Magnet", "magnet_on", "magnet on", "magnet off", "station_magnet_toggle")
+    relay_toggle("Tool Power", "tool_power_on", "toolpower on", "toolpower off", "station_power_toggle")
 
 with tab6:
     st.header("Stepper Motor Control")
