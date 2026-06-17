@@ -2,6 +2,7 @@ import streamlit as st
 import serial
 import serial.tools.list_ports
 import time
+import re
 
 # --- Setup session state for serial connection ---
 if 'serial_conn' not in st.session_state:
@@ -22,6 +23,10 @@ if 'last_serial_command' not in st.session_state:
     st.session_state.last_serial_command = ""
 if 'last_live_command' not in st.session_state:
     st.session_state.last_live_command = ""
+if 'auto_status_refresh' not in st.session_state:
+    st.session_state.auto_status_refresh = True
+if 'last_status_poll_time' not in st.session_state:
+    st.session_state.last_status_poll_time = 0.0
 for joint_name in ["pitch", "roll", "yaw", "elbow"]:
     if f"{joint_name}_val" not in st.session_state:
         st.session_state[f"{joint_name}_val"] = 0.0
@@ -29,8 +34,8 @@ for joint_name in ["pitch", "roll", "yaw", "elbow"]:
         st.session_state[f"live_{joint_name}_val"] = 0.0
 
 # --- Helper functions ---
-TOOL_SLOTS = {"gripper": 0, "hand": 2, "drill": 1}
-SLOT_TOOLS = {0: "Gripper", 1: "Drill", 2: "Hand"}
+TOOL_SLOTS = {"hand": 0, "drill": 1, "gripper": 2}
+SLOT_TOOLS = {0: "Hand", 1: "Drill", 2: "Gripper"}
 ARM_REST_POSE = {"pitch": 0.0, "roll": 0.0, "yaw": 0.0, "elbow": 50.0}
 JOINT_LIMITS = {
     "pitch": ("Shoulder Pitch (S0)", -50.0, 130.0),
@@ -127,6 +132,58 @@ def read_serial_response(wait_time=0.35):
 
     return "".join(chunks).strip()
 
+def parse_status_response(response):
+    if not response:
+        return
+
+    q_match = re.search(
+        r"Current q\s*=\s*\[\s*([-+]?\d+(?:\.\d+)?)\s*,\s*([-+]?\d+(?:\.\d+)?)\s*,\s*([-+]?\d+(?:\.\d+)?)\s*,\s*([-+]?\d+(?:\.\d+)?)\s*\]",
+        response,
+        re.IGNORECASE,
+    )
+    if q_match:
+        for joint_name, value in zip(["pitch", "roll", "yaw", "elbow"], q_match.groups()):
+            st.session_state[f"{joint_name}_val"] = float(value)
+
+    tool_match = re.search(r"Active tool:\s*(\w+)", response, re.IGNORECASE)
+    if tool_match:
+        tool = normalize_tool_name(tool_match.group(1))
+        if tool:
+            st.session_state.held_tool = tool
+
+    slot_match = re.search(r"Tool station slot:\s*(-?\d+)", response, re.IGNORECASE)
+    if slot_match:
+        st.session_state.station_slot = int(slot_match.group(1)) % 3
+
+    magnet_match = re.search(r"Magnet relay 1(?:\s+is|\s*:)\s*(ON|OFF)", response, re.IGNORECASE)
+    if magnet_match:
+        st.session_state.magnet_on = magnet_match.group(1).upper() == "ON"
+
+    power_match = re.search(r"Tool power relay 2(?:\s+is|\s*:)\s*(ON|OFF)", response, re.IGNORECASE)
+    if power_match:
+        st.session_state.tool_power_on = power_match.group(1).upper() == "ON"
+
+def request_status(silent=False):
+    conn = st.session_state.serial_conn
+    if not conn or not conn.is_open:
+        return
+
+    try:
+        conn.reset_input_buffer()
+        conn.write(b"status\n")
+        response = read_serial_response(0.45)
+        if response:
+            parse_status_response(response)
+            st.session_state.last_serial_response = response
+            st.session_state.last_serial_command = "status"
+            st.session_state.last_status_poll_time = time.time()
+        elif not silent:
+            st.toast("No status response received yet.")
+    except Exception as e:
+        if not silent:
+            st.error(f"Error requesting status: {e}")
+        disconnect_serial()
+
 def remember_command_state(cmd):
     parts = cmd.strip().lower().split()
     if not parts:
@@ -219,6 +276,7 @@ def connect_serial(port, baudrate=115200):
         st.session_state.station_slot = 0
         st.session_state.magnet_on = False
         st.session_state.tool_power_on = False
+        request_status(silent=True)
         st.success(f"Connected to {port} at {baudrate} baud")
     except Exception as e:
         st.error(f"Error connecting to {port}: {e}")
@@ -242,6 +300,7 @@ def send_command(cmd, expect_response=False):
             if expect_response:
                 response = read_serial_response()
                 st.session_state.last_serial_response = response or "(No response received yet.)"
+                parse_status_response(response)
                 st.toast(st.session_state.last_serial_response[:220])
             else:
                 st.toast(f"Sent: {cmd}")
@@ -268,8 +327,7 @@ def relay_toggle_changed(state_name, on_cmd, off_cmd, key):
         send_command(on_cmd if desired_state else off_cmd)
 
 def relay_toggle(label, state_name, on_cmd, off_cmd, key):
-    if key not in st.session_state:
-        st.session_state[key] = st.session_state[state_name]
+    st.session_state[key] = st.session_state[state_name]
 
     st.toggle(
         label,
@@ -277,6 +335,36 @@ def relay_toggle(label, state_name, on_cmd, off_cmd, key):
         on_change=relay_toggle_changed,
         args=(state_name, on_cmd, off_cmd, key),
     )
+
+def render_system_status(auto_poll=False):
+    if auto_poll and st.session_state.serial_conn and st.session_state.serial_conn.is_open:
+        if st.session_state.auto_status_refresh and time.time() - st.session_state.last_status_poll_time > 1.5:
+            request_status(silent=True)
+
+    st.subheader("System Status")
+    status_col1, status_col2, status_col3, status_col4 = st.columns(4)
+    with status_col1:
+        tool_state = "off" if st.session_state.held_tool == "none" else "ok"
+        status_card("Held Tool", st.session_state.held_tool.title(), tool_state)
+    with status_col2:
+        slot_tool = SLOT_TOOLS.get(st.session_state.station_slot, "Unknown")
+        status_card("Station Slot", f"{st.session_state.station_slot} - {slot_tool}")
+    with status_col3:
+        status_card("Magnet Relay 1", "ON" if st.session_state.magnet_on else "OFF", "ok" if st.session_state.magnet_on else "off")
+    with status_col4:
+        status_card("Tool Power Relay 2", "ON" if st.session_state.tool_power_on else "OFF", "warn" if st.session_state.tool_power_on else "off")
+
+    status_actions = st.columns([1, 3])
+    with status_actions[0]:
+        if st.button("Sync Status", use_container_width=True):
+            request_status()
+    with status_actions[1]:
+        st.caption("Status is parsed from the ESP32 `status` response when synced or auto-refreshed.")
+
+    if st.session_state.last_serial_response:
+        with st.expander("Firmware Output", expanded=True):
+            st.caption(f"Last command: {st.session_state.last_serial_command}")
+            st.code(st.session_state.last_serial_response)
 
 # --- UI Layout ---
 st.set_page_config(page_title="Humanoid Arm Control", layout="wide")
@@ -364,24 +452,14 @@ st.title("4-DOF Humanoid Arm Controller")
 st.markdown('<div class="app-title">4-DOF Humanoid Arm Controller</div>', unsafe_allow_html=True)
 st.markdown('<div class="section-note">Operator panel for arm motion, tool power, and rotary tool exchange.</div>', unsafe_allow_html=True)
 
-st.subheader("System Status")
-status_col1, status_col2, status_col3, status_col4 = st.columns(4)
-with status_col1:
-    tool_state = "off" if st.session_state.held_tool == "none" else "ok"
-    status_card("Held Tool", st.session_state.held_tool.title(), tool_state)
-with status_col2:
-    slot_tool = SLOT_TOOLS.get(st.session_state.station_slot, "Unknown")
-    status_card("Station Slot", f"{st.session_state.station_slot} - {slot_tool}")
-with status_col3:
-    status_card("Magnet Relay 1", "ON" if st.session_state.magnet_on else "OFF", "ok" if st.session_state.magnet_on else "off")
-with status_col4:
-    status_card("Tool Power Relay 2", "ON" if st.session_state.tool_power_on else "OFF", "warn" if st.session_state.tool_power_on else "off")
-st.caption("Status is tracked by this app after commands it sends. Use Status for firmware confirmation.")
+if hasattr(st, "fragment"):
+    @st.fragment(run_every="2s")
+    def system_status_fragment():
+        render_system_status(auto_poll=True)
 
-if st.session_state.last_serial_response:
-    with st.expander("Firmware Output", expanded=True):
-        st.caption(f"Last command: {st.session_state.last_serial_command}")
-        st.code(st.session_state.last_serial_response)
+    system_status_fragment()
+else:
+    render_system_status(auto_poll=True)
 
 with st.expander("Robot Geometry Config"):
     st.caption("Runtime FK/IK geometry in millimeters. Changes are sent to the ESP32 and remain active until reset or reboot.")
@@ -468,6 +546,12 @@ with st.sidebar:
         st.success(f"Status: Connected to {st.session_state.connected_port}")
     else:
         st.error("Status: Disconnected")
+
+    st.session_state.auto_status_refresh = st.checkbox(
+        "Auto-sync status",
+        value=st.session_state.auto_status_refresh,
+        help="Poll the ESP32 status every 2 seconds while connected.",
+    )
         
     st.divider()
     st.header("Arm Settings")
@@ -695,14 +779,14 @@ with tab5:
 
     cs1, cs2, cs3 = st.columns(3)
     with cs1:
-        if st.button("Slot 0: Gripper", use_container_width=True):
-            send_command("station gripper")
+        if st.button("Slot 0: Hand", use_container_width=True):
+            send_command("station hand")
     with cs2:
         if st.button("Slot 1: Drill", use_container_width=True):
             send_command("station drill")
     with cs3:
-        if st.button("Slot 2: Hand", use_container_width=True):
-            send_command("station hand")
+        if st.button("Slot 2: Gripper", use_container_width=True):
+            send_command("station gripper")
 
     station_slot = st.number_input("Station slot", min_value=0, max_value=2, value=0, step=1)
     if st.button("Rotate to Slot", type="primary", use_container_width=True):

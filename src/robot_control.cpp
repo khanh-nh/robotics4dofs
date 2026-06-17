@@ -20,7 +20,8 @@ float currentElbow = 0;
 int stepDelayMs = 15;
 int normalStepDelayMs = 15;
 ToolType activeTool = TOOL_NONE;
-int currentToolStationSlot = toolSlotGripper;
+int currentToolStationSlot = toolSlotHand;
+bool magnetEnabled = false;
 bool toolPowerEnabled = false;
 float currentToolChangePitch = toolChangePitch;
 float currentToolChangeRoll = toolChangeRoll;
@@ -56,21 +57,26 @@ void setupServos() {
   servo3.attach(servo3Pin, minPulse, maxPulse);
   toolServo.attach(toolServoPin, minPulse, maxPulse);
 
-  servo0.write(servo0Rest);
-  servo1.write(servo1Rest);
-  servo2.write(servo2Rest);
-  servo3.write(servo3Rest);
+  int initial0 = round(servo0Rest + servo0Dir * armRestPitch);
+  int initial1 = round(servo1Rest + servo1Dir * armRestRoll);
+  int initial2 = round(servo2Rest + servo2Dir * armRestYaw);
+  int initial3 = round(servo3Rest + servo3Dir * armRestElbow);
+
+  servo0.write(initial0);
+  servo1.write(initial1);
+  servo2.write(initial2);
+  servo3.write(initial3);
   toolServo.write(toolServoRestAngle);
 
-  servo0Angle = servo0Rest;
-  servo1Angle = servo1Rest;
-  servo2Angle = servo2Rest;
-  servo3Angle = servo3Rest;
+  servo0Angle = initial0;
+  servo1Angle = initial1;
+  servo2Angle = initial2;
+  servo3Angle = initial3;
 
-  currentPitch = 0;
-  currentRoll  = 0;
-  currentYaw   = 0;
-  currentElbow = 0;
+  currentPitch = armRestPitch;
+  currentRoll  = armRestRoll;
+  currentYaw   = armRestYaw;
+  currentElbow = armRestElbow;
 }
 
 void setupStepper() {
@@ -660,6 +666,7 @@ void testArmServos() {
 
 void setMagnet(bool enabled) {
   digitalWrite(magnetRelayPin, enabled ? HIGH : LOW);
+  magnetEnabled = enabled;
   Serial.print("Magnet relay 1 is ");
   Serial.println(enabled ? "ON" : "OFF");
 }
@@ -680,7 +687,11 @@ void printToolStatus() {
   Serial.println(toolName(activeTool));
   Serial.print("Tool station slot: ");
   Serial.println(currentToolStationSlot);
-  Serial.println("Slots: 0=gripper, 1=drill, 2=hand");
+  Serial.print("Magnet relay 1: ");
+  Serial.println(magnetEnabled ? "ON" : "OFF");
+  Serial.print("Tool power relay 2: ");
+  Serial.println(toolPowerEnabled ? "ON" : "OFF");
+  Serial.println("Slots: 0=hand, 1=drill, 2=gripper");
 }
 
 void gripperOpen() {

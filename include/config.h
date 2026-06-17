@@ -35,9 +35,9 @@ const int relayPin = magnetRelayPin;
 const int toolStationSlots = 3;
 const float toolStationStepDeg = 120.0;
 
-const int toolSlotGripper = 0;
-const int toolSlotHand = 2;
+const int toolSlotHand = 0;
 const int toolSlotDrill = 1;
+const int toolSlotGripper = 2;
 
 // Tool exchange arm pose, expressed as joint angles relative to rest.
 // Start near rest; tune these once the physical station position is fixed.

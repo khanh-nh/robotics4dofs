@@ -199,7 +199,7 @@ void setup() {
 
   Serial.println("Robot arm ready.");
   Serial.println("Open Serial Monitor at 115200 baud with Newline enabled.");
-  printFK(0, 0, 0, 0);
+  printFK(armRestPitch, armRestRoll, armRestYaw, armRestElbow);
 }
 
 // =====================================================
