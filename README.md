@@ -4,10 +4,8 @@ A 4-Degree-of-Freedom (4DOF) robotic humanoid arm controlled via an ESP32 microc
 
 ## Demo Video
 
-<!-- Add your video link or embed code below! -->
-[![Watch the video](https://img.youtube.com/vi/YOUR_VIDEO_ID/hqdefault.jpg)](https://youtu.be/YOUR_VIDEO_ID)
 
-> *Click the image above to watch the robot in action, or [click here](https://youtu.be/YOUR_VIDEO_ID).*
+https://github.com/user-attachments/assets/3dcf2fd9-d3b4-4252-ae77-8185305c0198
 
 ## Features
 
